@@ -1,0 +1,26 @@
+name: Fetch Opta Lineups
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Opta lineups
+        run: |
+          curl -L \
+            --fail \
+            --retry 3 \
+            -o opta_lineups.parquet \
+            "https://github.com/peteowen1/pannadata/releases/download/opta-latest/opta_lineups.parquet"
+
+          ls -lh opta_lineups.parquet
+
+      - name: Upload lineup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opta-lineups
+          path: opta_lineups.parquet
+          retention-days: 7
