@@ -16,7 +16,7 @@ jobs:
             -o opta_lineups.parquet \
             "https://github.com/peteowen1/pannadata/releases/download/opta-latest/opta_lineups.parquet"
 
-      - name: Convert lineups to CSV
+      - name: Convert EPL lineups to CSV
         run: |
           python -m pip install --quiet pyarrow pandas
 
@@ -25,24 +25,27 @@ jobs:
 
           df = pd.read_parquet("opta_lineups.parquet")
 
-          df["match_date"] = pd.to_datetime(
-              df["match_date"],
-              errors="coerce"
-          )
+          print("Competitions:", df["competition"].unique())
+          print("Seasons:", sorted(df["season"].dropna().astype(str).unique()))
 
-          # Only the five seasons needed for our test
-          df = df[
-              (df["match_date"] >= "2021-08-01") &
-              (df["match_date"] < "2026-07-01")
+          seasons = [
+              "2021-2022",
+              "2022-2023",
+              "2023-2024",
+              "2024-2025",
+              "2025-2026"
           ]
 
-          df.to_csv(
-              "opta_lineups_2021_2026.csv",
-              index=False
-          )
+          df = df[
+              (df["competition"].astype(str) == "EPL") &
+              (df["season"].astype(str).isin(seasons))
+          ].copy()
 
-          print("Rows:", len(df))
-          print(df.columns.tolist())
+          df.to_csv("opta_lineups_2021_2026.csv", index=False)
+
+          print("EPL rows:", len(df))
+          print("Matches:", df["match_id"].nunique())
+          print(df.groupby("season")["match_id"].nunique())
           PY
 
       - name: Upload lineup data
