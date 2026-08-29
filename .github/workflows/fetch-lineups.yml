@@ -8,13 +8,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download Opta lineups
+      - name: Download source data
         run: |
+          # Download Opta lineup data
           curl -L \
             --fail \
             --retry 3 \
             -o opta_lineups.parquet \
             "https://github.com/peteowen1/pannadata/releases/download/opta-latest/opta_lineups.parquet"
+
+          # Download EPL historical results
+          curl -L \
+            --fail \
+            --retry 3 \
+            -o epl_results.csv \
+            "https://raw.githubusercontent.com/AnishKhetani/premier-league-data/main/data/processed/results.csv"
+
+          echo "Downloaded files:"
+          ls -lh opta_lineups.parquet
+          ls -lh epl_results.csv
 
       - name: Convert EPL lineups to CSV
         run: |
@@ -23,11 +35,20 @@ jobs:
           python - <<'PY'
           import pandas as pd
 
+          # -------------------------
+          # Load Opta lineup data
+          # -------------------------
           df = pd.read_parquet("opta_lineups.parquet")
 
-          print("Competitions:", df["competition"].unique())
-          print("Seasons:", sorted(df["season"].dropna().astype(str).unique()))
+          print("Available competitions:")
+          print(df["competition"].unique())
 
+          print("Available seasons:")
+          print(sorted(df["season"].dropna().astype(str).unique()))
+
+          # -------------------------
+          # Seasons required
+          # -------------------------
           seasons = [
               "2021-2022",
               "2022-2023",
@@ -36,23 +57,98 @@ jobs:
               "2025-2026"
           ]
 
+          # -------------------------
+          # Keep EPL only
+          # -------------------------
           df = df[
               (df["competition"].astype(str) == "EPL") &
               (df["season"].astype(str).isin(seasons))
           ].copy()
 
-          df.to_csv("opta_lineups_2021_2026.csv", index=False)
+          # -------------------------
+          # Save CSV
+          # -------------------------
+          df.to_csv(
+              "opta_lineups_2021_2026.csv",
+              index=False
+          )
 
-          print("EPL rows:", len(df))
-          print("Matches:", df["match_id"].nunique())
-          print(df.groupby("season")["match_id"].nunique())
+          # -------------------------
+          # Validation
+          # -------------------------
+          print()
+          print("EPL lineup rows:", len(df))
+          print("Unique matches:", df["match_id"].nunique())
+
+          print()
+          print("Matches by season:")
+          print(
+              df.groupby("season")["match_id"]
+                .nunique()
+                .sort_index()
+          )
+
+          print()
+          print("Starter rows by season:")
+          starters = df[df["is_starter"] == True]
+
+          print(
+              starters.groupby("season")
+                      .size()
+                      .sort_index()
+          )
+
+          print()
+          print("CSV created successfully.")
           PY
 
-      - name: Upload lineup data
+      - name: Validate EPL results
+        run: |
+          python - <<'PY'
+          import pandas as pd
+
+          results = pd.read_csv("epl_results.csv")
+
+          seasons = [
+              "2021-22",
+              "2022-23",
+              "2023-24",
+              "2024-25",
+              "2025-26"
+          ]
+
+          results = results[
+              results["season"].astype(str).isin(seasons)
+          ].copy()
+
+          print("EPL results rows:", len(results))
+
+          print()
+          print("Matches by season:")
+          print(
+              results.groupby("season")
+                     .size()
+                     .sort_index()
+          )
+
+          print()
+          print("Required columns:")
+          print([
+              "season",
+              "date",
+              "home_team",
+              "away_team",
+              "fthg",
+              "ftag"
+          ])
+          PY
+
+      - name: Upload model data
         uses: actions/upload-artifact@v4
         with:
           name: opta-lineups
           path: |
             opta_lineups.parquet
             opta_lineups_2021_2026.csv
+            epl_results.csv
           retention-days: 7
