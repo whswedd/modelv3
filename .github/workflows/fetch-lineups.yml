@@ -11,9 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------------------
-      # 1. SET UP PYTHON
-      # ---------------------------------------------------------
+
+      # =========================================================
+      # 1. SETUP
+      # =========================================================
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -28,9 +29,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pandas pyarrow requests
 
-      # ---------------------------------------------------------
+      # =========================================================
       # 2. DOWNLOAD OPTA LINEUPS
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Download Opta lineups
         run: |
@@ -53,9 +54,9 @@ jobs:
           print("Downloaded bytes:", len(r.content))
           PY
 
-      # ---------------------------------------------------------
-      # 3. EXTRACT EPL 2021-22 TO 2025-26
-      # ---------------------------------------------------------
+      # =========================================================
+      # 3. FILTER EPL LINEUPS
+      # =========================================================
 
       - name: Convert EPL lineups to CSV
         run: |
@@ -63,12 +64,6 @@ jobs:
           import pandas as pd
 
           df = pd.read_parquet("opta_lineups.parquet")
-
-          print("Available competitions:")
-          print(df["competition"].value_counts().head(20))
-
-          print("\nAvailable seasons:")
-          print(sorted(df["season"].dropna().astype(str).unique()))
 
           seasons = [
               "2021-2022",
@@ -88,33 +83,22 @@ jobs:
               index=False
           )
 
-          print("\nEPL lineup rows:", len(df))
+          print("EPL lineup rows:", len(df))
           print("Unique matches:", df["match_id"].nunique())
           print("Unique players:", df["player_id"].nunique())
 
           print("\nMatches by season:")
+
           print(
               df.groupby("season")["match_id"]
                 .nunique()
                 .sort_index()
           )
-
-          print("\nStarter rows by season:")
-          starters = df[
-              df["is_starter"].astype(str).str.lower()
-              .isin(["true", "1"])
-          ]
-
-          print(
-              starters.groupby("season")
-              .size()
-              .sort_index()
-          )
           PY
 
-      # ---------------------------------------------------------
-      # 4. DOWNLOAD FIFA / EA PLAYER RATING DATA
-      # ---------------------------------------------------------
+      # =========================================================
+      # 4. DOWNLOAD HISTORICAL FIFA / EA RATINGS
+      # =========================================================
 
       - name: Download historical FIFA and EA ratings
         run: |
@@ -125,23 +109,32 @@ jobs:
           from pathlib import Path
 
           datasets = {
+
+              # FIFA 22
               "fifa22":
                   "https://raw.githubusercontent.com/"
-                  "prathameshsonpatki/EDA-FIFA-Players-Analysis/"
-                  "main/players_22.csv",
+                  "MakuG/fifa22/main/players_22.csv",
 
+              # FIFA 23
               "fifa23":
                   "https://raw.githubusercontent.com/"
-                  "nyagami/fifa-player-stats/main/data/players_23.csv",
+                  "miraehab/FIFA-23-ML-Project/main/"
+                  "players_fifa23.csv",
 
+              # EA FC 24
               "fc24":
                   "https://raw.githubusercontent.com/"
-                  "nyagami/fifa-player-stats/main/data/male_players.csv",
+                  "federicopaschetta/FootballPlayersAnalysis/"
+                  "main/male_players.csv",
 
+              # EA FC 25
               "fc25":
                   "https://raw.githubusercontent.com/"
-                  "nyagami/fc-25-dataset/main/data/male_players.csv",
+                  "Rayen-khammessi/"
+                  "Football-Data-Engineering-Analytics-Project-"
+                  "EA-Sports-FC-25/main/male_players.csv",
 
+              # EA FC 26
               "fc26":
                   "https://raw.githubusercontent.com/"
                   "preetiravikiran/FIFA2026/main/"
@@ -150,69 +143,115 @@ jobs:
 
           Path("ratings_raw").mkdir(exist_ok=True)
 
+          failures = []
+
           for name, url in datasets.items():
 
-              print("\nDownloading:", name)
+              print()
+              print("=" * 60)
+              print("Downloading:", name)
               print(url)
 
               try:
-                  r = requests.get(url, timeout=180)
+
+                  r = requests.get(
+                      url,
+                      timeout=300
+                  )
 
                   print("HTTP:", r.status_code)
                   print("Bytes:", len(r.content))
 
-                  if r.ok and len(r.content) > 1000:
+                  if not r.ok:
+                      failures.append(
+                          f"{name}: HTTP {r.status_code}"
+                      )
+                      continue
 
-                      path = Path("ratings_raw") / f"{name}.csv"
-                      path.write_bytes(r.content)
+                  if len(r.content) < 1000:
+                      failures.append(
+                          f"{name}: file too small"
+                      )
+                      continue
 
-                      print("Saved:", path)
+                  path = (
+                      Path("ratings_raw")
+                      / f"{name}.csv"
+                  )
 
-                  else:
-                      print("WARNING: dataset unavailable")
+                  path.write_bytes(r.content)
+
+                  print("Saved:", path)
 
               except Exception as exc:
-                  print("WARNING:", name, exc)
+
+                  failures.append(
+                      f"{name}: {exc}"
+                  )
+
+          print()
+          print("=" * 60)
+
+          if failures:
+
+              print("DOWNLOAD FAILURES:")
+
+              for failure in failures:
+                  print(failure)
+
+              raise RuntimeError(
+                  "One or more rating datasets failed."
+              )
+
+          print(
+              "All five rating datasets "
+              "downloaded successfully."
+          )
           PY
 
-      # ---------------------------------------------------------
-      # 5. INSPECT RATING FILES
-      # ---------------------------------------------------------
+      # =========================================================
+      # 5. INSPECT RAW FILES
+      # =========================================================
 
-      - name: Inspect rating datasets
+      - name: Inspect raw rating datasets
         run: |
           python - <<'PY'
           import pandas as pd
           from pathlib import Path
 
-          for file in sorted(Path("ratings_raw").glob("*.csv")):
+          for file in sorted(
+              Path("ratings_raw").glob("*.csv")
+          ):
 
-              print("\n======================================")
+              print()
+              print("=" * 70)
               print(file)
-              print("======================================")
+              print("=" * 70)
 
-              try:
-                  df = pd.read_csv(file, low_memory=False)
+              df = pd.read_csv(
+                  file,
+                  low_memory=False
+              )
 
-                  print("Rows:", len(df))
-                  print("Columns:")
-                  print(list(df.columns))
-                  print("\nSample:")
-                  print(df.head(3).to_string())
+              print("Rows:", len(df))
 
-              except Exception as exc:
-                  print("ERROR:", exc)
+              print("Columns:")
+              print(list(df.columns))
+
+              print()
+              print(df.head(2).to_string())
           PY
 
-      # ---------------------------------------------------------
-      # 6. STANDARDISE PLAYER RATINGS
-      # ---------------------------------------------------------
+      # =========================================================
+      # 6. STANDARDISE ALL FIVE RATINGS FILES
+      # =========================================================
 
-      - name: Standardise rating datasets
+      - name: Standardise player rating datasets
         run: |
           python - <<'PY'
           import pandas as pd
           import numpy as np
+          import re
           from pathlib import Path
 
           season_map = {
@@ -223,42 +262,108 @@ jobs:
               "fc26":   "2025-2026",
           }
 
-          def find_col(df, possibilities):
+
+          def find_col(df, candidates):
 
               lookup = {
-                  str(c).lower().strip(): c
+                  str(c).strip().lower(): c
                   for c in df.columns
               }
 
-              for candidate in possibilities:
+              for candidate in candidates:
 
-                  if candidate.lower() in lookup:
-                      return lookup[candidate.lower()]
+                  key = candidate.strip().lower()
+
+                  if key in lookup:
+                      return lookup[key]
 
               return None
 
 
+          def id_from_url(value):
+
+              if pd.isna(value):
+                  return np.nan
+
+              match = re.search(
+                  r"/(\d+)(?:/)?$",
+                  str(value)
+              )
+
+              if match:
+                  return match.group(1)
+
+              return np.nan
+
+
           outputs = []
 
-          for file in sorted(Path("ratings_raw").glob("*.csv")):
+          required_versions = set(
+              season_map.keys()
+          )
+
+          available_versions = {
+              p.stem
+              for p in Path(
+                  "ratings_raw"
+              ).glob("*.csv")
+          }
+
+          missing_versions = (
+              required_versions
+              - available_versions
+          )
+
+          if missing_versions:
+
+              raise RuntimeError(
+                  "Missing raw rating files: "
+                  + str(
+                      sorted(
+                          missing_versions
+                      )
+                  )
+              )
+
+
+          for file in sorted(
+              Path("ratings_raw").glob("*.csv")
+          ):
 
               version = file.stem
 
               if version not in season_map:
                   continue
 
-              print("\nProcessing:", version)
+              print()
+              print("=" * 60)
+              print("Processing:", version)
 
-              df = pd.read_csv(file, low_memory=False)
+              df = pd.read_csv(
+                  file,
+                  low_memory=False
+              )
 
               name_col = find_col(
                   df,
                   [
                       "short_name",
-                      "long_name",
                       "name",
                       "player_name",
+                      "fullname",
                       "full_name",
+                      "long_name",
+                      "Name",
+                  ],
+              )
+
+              full_name_col = find_col(
+                  df,
+                  [
+                      "long_name",
+                      "full_name",
+                      "fullname",
+                      "FullName",
                   ],
               )
 
@@ -266,9 +371,12 @@ jobs:
                   df,
                   [
                       "overall",
-                      "ova",
-                      "rating",
+                      "Overall",
+                      "ovr",
+                      "OVR",
                       "overall_rating",
+                      "rating",
+                      "ova",
                   ],
               )
 
@@ -277,7 +385,9 @@ jobs:
                   [
                       "club_name",
                       "club",
+                      "Club",
                       "team",
+                      "Team",
                       "team_name",
                   ],
               )
@@ -286,9 +396,12 @@ jobs:
                   df,
                   [
                       "player_positions",
-                      "position",
                       "positions",
+                      "Positions",
+                      "position",
+                      "Position",
                       "best_position",
+                      "BestPosition",
                   ],
               )
 
@@ -298,50 +411,140 @@ jobs:
                       "sofifa_id",
                       "player_id",
                       "id",
+                      "ID",
                   ],
               )
 
-              print("Name column:", name_col)
-              print("Overall column:", overall_col)
-              print("Club column:", club_col)
-              print("Position column:", position_col)
-              print("Player ID column:", player_id_col)
+              url_col = find_col(
+                  df,
+                  [
+                      "url",
+                      "URL",
+                      "player_url",
+                  ],
+              )
 
-              if name_col is None or overall_col is None:
+              print(
+                  "Name column:",
+                  name_col
+              )
 
-                  print(
-                      "WARNING:",
-                      version,
-                      "cannot be standardised."
+              print(
+                  "Full name column:",
+                  full_name_col
+              )
+
+              print(
+                  "Overall column:",
+                  overall_col
+              )
+
+              print(
+                  "Club column:",
+                  club_col
+              )
+
+              print(
+                  "Position column:",
+                  position_col
+              )
+
+              print(
+                  "Player ID column:",
+                  player_id_col
+              )
+
+              if name_col is None:
+
+                  raise RuntimeError(
+                      f"{version}: "
+                      "player name column not found."
                   )
 
-                  continue
+              if overall_col is None:
 
-              out = pd.DataFrame()
+                  raise RuntimeError(
+                      f"{version}: "
+                      "overall rating column not found."
+                  )
 
-              out["season"] = season_map[version]
-              out["rating_version"] = version
+              # IMPORTANT:
+              # Initialise with df.index so scalar season
+              # assignments populate every row correctly.
+
+              out = pd.DataFrame(
+                  index=df.index
+              )
+
+              out["season"] = (
+                  season_map[version]
+              )
+
+              out["rating_version"] = (
+                  version
+              )
 
               if player_id_col is not None:
-                  out["rating_player_id"] = df[player_id_col]
-              else:
-                  out["rating_player_id"] = np.nan
 
-              out["player_name"] = df[name_col]
+                  out[
+                      "rating_player_id"
+                  ] = df[player_id_col]
+
+              elif url_col is not None:
+
+                  out[
+                      "rating_player_id"
+                  ] = df[url_col].apply(
+                      id_from_url
+                  )
+
+              else:
+
+                  out[
+                      "rating_player_id"
+                  ] = np.nan
+
+              out["player_name"] = (
+                  df[name_col]
+              )
+
+              if full_name_col is not None:
+
+                  out["full_name"] = (
+                      df[full_name_col]
+                  )
+
+              else:
+
+                  out["full_name"] = (
+                      df[name_col]
+                  )
 
               if club_col is not None:
-                  out["club"] = df[club_col]
+
+                  out["club"] = (
+                      df[club_col]
+                  )
+
               else:
+
                   out["club"] = np.nan
 
               if position_col is not None:
-                  out["position"] = df[position_col]
+
+                  out["position"] = (
+                      df[position_col]
+                  )
+
               else:
+
                   out["position"] = np.nan
 
-              out["overall"] = pd.to_numeric(
-                  df[overall_col],
-                  errors="coerce"
+              out["overall"] = (
+                  pd.to_numeric(
+                      df[overall_col],
+                      errors="coerce"
+                  )
               )
 
               out = out[
@@ -354,17 +557,30 @@ jobs:
                   len(out)
               )
 
+              print(
+                  "Overall range:",
+                  out["overall"].min(),
+                  "-",
+                  out["overall"].max()
+              )
+
               outputs.append(out)
 
-
-          if not outputs:
-              raise RuntimeError(
-                  "No rating datasets were successfully standardised."
-              )
 
           ratings = pd.concat(
               outputs,
               ignore_index=True
+          )
+
+          ratings[
+              "rating_player_id"
+          ] = ratings[
+              "rating_player_id"
+          ].astype(str).replace(
+              {
+                  "nan": "",
+                  "None": "",
+              }
           )
 
           ratings.to_csv(
@@ -372,23 +588,58 @@ jobs:
               index=False
           )
 
-          print("\n======================================")
+
+          print()
+          print("=" * 70)
           print("FINAL RATINGS FILE")
-          print("======================================")
+          print("=" * 70)
 
-          print("Rows:", len(ratings))
-
-          print("\nRows by season:")
           print(
+              "Rows:",
+              len(ratings)
+          )
+
+          print()
+          print("Rows by season:")
+
+          counts = (
               ratings.groupby("season")
               .size()
               .sort_index()
           )
 
-          print("\nRating distribution:")
+          print(counts)
+
+          expected_seasons = set(
+              season_map.values()
+          )
+
+          actual_seasons = set(
+              ratings["season"]
+              .dropna()
+              .astype(str)
+              .unique()
+          )
+
+          missing = (
+              expected_seasons
+              - actual_seasons
+          )
+
+          if missing:
+
+              raise RuntimeError(
+                  "Missing standardised seasons: "
+                  + str(sorted(missing))
+              )
+
+          print()
+          print("Rating summary:")
+
           print(
-              ratings.groupby("season")["overall"]
-              .agg(
+              ratings.groupby(
+                  "season"
+              )["overall"].agg(
                   [
                       "count",
                       "mean",
@@ -398,54 +649,95 @@ jobs:
                   ]
               )
           )
+
+          print()
+          print(
+              "All five rating seasons "
+              "standardised successfully."
+          )
           PY
 
-      # ---------------------------------------------------------
-      # 7. VALIDATE OUTPUTS
-      # ---------------------------------------------------------
+      # =========================================================
+      # 7. EPL PLAYER COVERAGE PRE-CHECK
+      # =========================================================
 
-      - name: Validate final files
+      - name: Validate EPL rating coverage
         run: |
           python - <<'PY'
           import pandas as pd
-
-          print("\n----- OPTA -----")
 
           lineups = pd.read_csv(
               "opta_lineups_2021_2026.csv",
               low_memory=False
           )
 
-          print("Rows:", len(lineups))
-          print("Matches:", lineups["match_id"].nunique())
-          print("Players:", lineups["player_id"].nunique())
-
-          print("\n----- RATINGS -----")
-
           ratings = pd.read_csv(
               "player_ratings_2021_2026.csv",
               low_memory=False
           )
 
-          print("Rows:", len(ratings))
+          print()
+          print("OPTA")
+          print("----")
 
           print(
-              ratings.groupby("season")
-              .size()
+              "Rows:",
+              len(lineups)
+          )
+
+          print(
+              "Unique players:",
+              lineups["player_id"].nunique()
+          )
+
+          print()
+          print("RATINGS")
+          print("-------")
+
+          print(
+              "Rows:",
+              len(ratings)
+          )
+
+          print()
+          print(
+              ratings.groupby(
+                  "season"
+              ).size()
           )
 
           if len(lineups) == 0:
-              raise RuntimeError("Opta lineup CSV is empty")
+
+              raise RuntimeError(
+                  "Opta lineup file is empty."
+              )
 
           if len(ratings) == 0:
-              raise RuntimeError("Ratings CSV is empty")
 
-          print("\nVALIDATION PASSED")
+              raise RuntimeError(
+                  "Player ratings file is empty."
+              )
+
+          if (
+              ratings["season"]
+              .nunique()
+              != 5
+          ):
+
+              raise RuntimeError(
+                  "Expected exactly "
+                  "five rating seasons."
+              )
+
+          print()
+          print(
+              "VALIDATION PASSED"
+          )
           PY
 
-      # ---------------------------------------------------------
-      # 8. UPLOAD EVERYTHING
-      # ---------------------------------------------------------
+      # =========================================================
+      # 8. UPLOAD ARTIFACT
+      # =========================================================
 
       - name: Upload modelling data
         uses: actions/upload-artifact@v4
