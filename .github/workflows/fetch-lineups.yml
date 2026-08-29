@@ -1,154 +1,458 @@
-name: Fetch Opta Lineups
+name: Fetch Opta Lineups and FIFA Ratings
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  fetch:
+  fetch-data:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download source data
+      # ---------------------------------------------------------
+      # 1. SET UP PYTHON
+      # ---------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
         run: |
-          # Download Opta lineup data
-          curl -L \
-            --fail \
-            --retry 3 \
-            -o opta_lineups.parquet \
-            "https://github.com/peteowen1/pannadata/releases/download/opta-latest/opta_lineups.parquet"
+          python -m pip install --upgrade pip
+          python -m pip install pandas pyarrow requests
 
-          # Download EPL historical results
-          curl -L \
-            --fail \
-            --retry 3 \
-            -o epl_results.csv \
-            "https://raw.githubusercontent.com/AnishKhetani/premier-league-data/main/data/processed/results.csv"
+      # ---------------------------------------------------------
+      # 2. DOWNLOAD OPTA LINEUPS
+      # ---------------------------------------------------------
 
-          echo "Downloaded files:"
-          ls -lh opta_lineups.parquet
-          ls -lh epl_results.csv
+      - name: Download Opta lineups
+        run: |
+          python - <<'PY'
+          import requests
+
+          url = (
+              "https://github.com/peteowen1/pannadata/"
+              "releases/download/opta-latest/opta_lineups.parquet"
+          )
+
+          print("Downloading Opta lineups...")
+
+          r = requests.get(url, timeout=300)
+          r.raise_for_status()
+
+          with open("opta_lineups.parquet", "wb") as f:
+              f.write(r.content)
+
+          print("Downloaded bytes:", len(r.content))
+          PY
+
+      # ---------------------------------------------------------
+      # 3. EXTRACT EPL 2021-22 TO 2025-26
+      # ---------------------------------------------------------
 
       - name: Convert EPL lineups to CSV
         run: |
-          python -m pip install --quiet pyarrow pandas
-
           python - <<'PY'
           import pandas as pd
 
-          # -------------------------
-          # Load Opta lineup data
-          # -------------------------
           df = pd.read_parquet("opta_lineups.parquet")
 
           print("Available competitions:")
-          print(df["competition"].unique())
+          print(df["competition"].value_counts().head(20))
 
-          print("Available seasons:")
+          print("\nAvailable seasons:")
           print(sorted(df["season"].dropna().astype(str).unique()))
 
-          # -------------------------
-          # Seasons required
-          # -------------------------
           seasons = [
               "2021-2022",
               "2022-2023",
               "2023-2024",
               "2024-2025",
-              "2025-2026"
+              "2025-2026",
           ]
 
-          # -------------------------
-          # Keep EPL only
-          # -------------------------
           df = df[
-              (df["competition"].astype(str) == "EPL") &
-              (df["season"].astype(str).isin(seasons))
+              (df["competition"].astype(str) == "EPL")
+              & (df["season"].astype(str).isin(seasons))
           ].copy()
 
-          # -------------------------
-          # Save CSV
-          # -------------------------
           df.to_csv(
               "opta_lineups_2021_2026.csv",
               index=False
           )
 
-          # -------------------------
-          # Validation
-          # -------------------------
-          print()
-          print("EPL lineup rows:", len(df))
+          print("\nEPL lineup rows:", len(df))
           print("Unique matches:", df["match_id"].nunique())
+          print("Unique players:", df["player_id"].nunique())
 
-          print()
-          print("Matches by season:")
+          print("\nMatches by season:")
           print(
               df.groupby("season")["match_id"]
                 .nunique()
                 .sort_index()
           )
 
-          print()
-          print("Starter rows by season:")
-          starters = df[df["is_starter"] == True]
+          print("\nStarter rows by season:")
+          starters = df[
+              df["is_starter"].astype(str).str.lower()
+              .isin(["true", "1"])
+          ]
 
           print(
               starters.groupby("season")
-                      .size()
-                      .sort_index()
+              .size()
+              .sort_index()
           )
-
-          print()
-          print("CSV created successfully.")
           PY
 
-      - name: Validate EPL results
+      # ---------------------------------------------------------
+      # 4. DOWNLOAD FIFA / EA PLAYER RATING DATA
+      # ---------------------------------------------------------
+
+      - name: Download historical FIFA and EA ratings
+        run: |
+          mkdir -p ratings_raw
+
+          python - <<'PY'
+          import requests
+          from pathlib import Path
+
+          datasets = {
+              "fifa22":
+                  "https://raw.githubusercontent.com/"
+                  "prathameshsonpatki/EDA-FIFA-Players-Analysis/"
+                  "main/players_22.csv",
+
+              "fifa23":
+                  "https://raw.githubusercontent.com/"
+                  "nyagami/fifa-player-stats/main/data/players_23.csv",
+
+              "fc24":
+                  "https://raw.githubusercontent.com/"
+                  "nyagami/fifa-player-stats/main/data/male_players.csv",
+
+              "fc25":
+                  "https://raw.githubusercontent.com/"
+                  "nyagami/fc-25-dataset/main/data/male_players.csv",
+
+              "fc26":
+                  "https://raw.githubusercontent.com/"
+                  "preetiravikiran/FIFA2026/main/"
+                  "fifa26_player_data.csv",
+          }
+
+          Path("ratings_raw").mkdir(exist_ok=True)
+
+          for name, url in datasets.items():
+
+              print("\nDownloading:", name)
+              print(url)
+
+              try:
+                  r = requests.get(url, timeout=180)
+
+                  print("HTTP:", r.status_code)
+                  print("Bytes:", len(r.content))
+
+                  if r.ok and len(r.content) > 1000:
+
+                      path = Path("ratings_raw") / f"{name}.csv"
+                      path.write_bytes(r.content)
+
+                      print("Saved:", path)
+
+                  else:
+                      print("WARNING: dataset unavailable")
+
+              except Exception as exc:
+                  print("WARNING:", name, exc)
+          PY
+
+      # ---------------------------------------------------------
+      # 5. INSPECT RATING FILES
+      # ---------------------------------------------------------
+
+      - name: Inspect rating datasets
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          for file in sorted(Path("ratings_raw").glob("*.csv")):
+
+              print("\n======================================")
+              print(file)
+              print("======================================")
+
+              try:
+                  df = pd.read_csv(file, low_memory=False)
+
+                  print("Rows:", len(df))
+                  print("Columns:")
+                  print(list(df.columns))
+                  print("\nSample:")
+                  print(df.head(3).to_string())
+
+              except Exception as exc:
+                  print("ERROR:", exc)
+          PY
+
+      # ---------------------------------------------------------
+      # 6. STANDARDISE PLAYER RATINGS
+      # ---------------------------------------------------------
+
+      - name: Standardise rating datasets
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+
+          season_map = {
+              "fifa22": "2021-2022",
+              "fifa23": "2022-2023",
+              "fc24":   "2023-2024",
+              "fc25":   "2024-2025",
+              "fc26":   "2025-2026",
+          }
+
+          def find_col(df, possibilities):
+
+              lookup = {
+                  str(c).lower().strip(): c
+                  for c in df.columns
+              }
+
+              for candidate in possibilities:
+
+                  if candidate.lower() in lookup:
+                      return lookup[candidate.lower()]
+
+              return None
+
+
+          outputs = []
+
+          for file in sorted(Path("ratings_raw").glob("*.csv")):
+
+              version = file.stem
+
+              if version not in season_map:
+                  continue
+
+              print("\nProcessing:", version)
+
+              df = pd.read_csv(file, low_memory=False)
+
+              name_col = find_col(
+                  df,
+                  [
+                      "short_name",
+                      "long_name",
+                      "name",
+                      "player_name",
+                      "full_name",
+                  ],
+              )
+
+              overall_col = find_col(
+                  df,
+                  [
+                      "overall",
+                      "ova",
+                      "rating",
+                      "overall_rating",
+                  ],
+              )
+
+              club_col = find_col(
+                  df,
+                  [
+                      "club_name",
+                      "club",
+                      "team",
+                      "team_name",
+                  ],
+              )
+
+              position_col = find_col(
+                  df,
+                  [
+                      "player_positions",
+                      "position",
+                      "positions",
+                      "best_position",
+                  ],
+              )
+
+              player_id_col = find_col(
+                  df,
+                  [
+                      "sofifa_id",
+                      "player_id",
+                      "id",
+                  ],
+              )
+
+              print("Name column:", name_col)
+              print("Overall column:", overall_col)
+              print("Club column:", club_col)
+              print("Position column:", position_col)
+              print("Player ID column:", player_id_col)
+
+              if name_col is None or overall_col is None:
+
+                  print(
+                      "WARNING:",
+                      version,
+                      "cannot be standardised."
+                  )
+
+                  continue
+
+              out = pd.DataFrame()
+
+              out["season"] = season_map[version]
+              out["rating_version"] = version
+
+              if player_id_col is not None:
+                  out["rating_player_id"] = df[player_id_col]
+              else:
+                  out["rating_player_id"] = np.nan
+
+              out["player_name"] = df[name_col]
+
+              if club_col is not None:
+                  out["club"] = df[club_col]
+              else:
+                  out["club"] = np.nan
+
+              if position_col is not None:
+                  out["position"] = df[position_col]
+              else:
+                  out["position"] = np.nan
+
+              out["overall"] = pd.to_numeric(
+                  df[overall_col],
+                  errors="coerce"
+              )
+
+              out = out[
+                  out["player_name"].notna()
+                  & out["overall"].notna()
+              ].copy()
+
+              print(
+                  "Standardised rows:",
+                  len(out)
+              )
+
+              outputs.append(out)
+
+
+          if not outputs:
+              raise RuntimeError(
+                  "No rating datasets were successfully standardised."
+              )
+
+          ratings = pd.concat(
+              outputs,
+              ignore_index=True
+          )
+
+          ratings.to_csv(
+              "player_ratings_2021_2026.csv",
+              index=False
+          )
+
+          print("\n======================================")
+          print("FINAL RATINGS FILE")
+          print("======================================")
+
+          print("Rows:", len(ratings))
+
+          print("\nRows by season:")
+          print(
+              ratings.groupby("season")
+              .size()
+              .sort_index()
+          )
+
+          print("\nRating distribution:")
+          print(
+              ratings.groupby("season")["overall"]
+              .agg(
+                  [
+                      "count",
+                      "mean",
+                      "median",
+                      "min",
+                      "max",
+                  ]
+              )
+          )
+          PY
+
+      # ---------------------------------------------------------
+      # 7. VALIDATE OUTPUTS
+      # ---------------------------------------------------------
+
+      - name: Validate final files
         run: |
           python - <<'PY'
           import pandas as pd
 
-          results = pd.read_csv("epl_results.csv")
+          print("\n----- OPTA -----")
 
-          seasons = [
-              "2021-22",
-              "2022-23",
-              "2023-24",
-              "2024-25",
-              "2025-26"
-          ]
-
-          results = results[
-              results["season"].astype(str).isin(seasons)
-          ].copy()
-
-          print("EPL results rows:", len(results))
-
-          print()
-          print("Matches by season:")
-          print(
-              results.groupby("season")
-                     .size()
-                     .sort_index()
+          lineups = pd.read_csv(
+              "opta_lineups_2021_2026.csv",
+              low_memory=False
           )
 
-          print()
-          print("Required columns:")
-          print([
-              "season",
-              "date",
-              "home_team",
-              "away_team",
-              "fthg",
-              "ftag"
-          ])
+          print("Rows:", len(lineups))
+          print("Matches:", lineups["match_id"].nunique())
+          print("Players:", lineups["player_id"].nunique())
+
+          print("\n----- RATINGS -----")
+
+          ratings = pd.read_csv(
+              "player_ratings_2021_2026.csv",
+              low_memory=False
+          )
+
+          print("Rows:", len(ratings))
+
+          print(
+              ratings.groupby("season")
+              .size()
+          )
+
+          if len(lineups) == 0:
+              raise RuntimeError("Opta lineup CSV is empty")
+
+          if len(ratings) == 0:
+              raise RuntimeError("Ratings CSV is empty")
+
+          print("\nVALIDATION PASSED")
           PY
 
-      - name: Upload model data
+      # ---------------------------------------------------------
+      # 8. UPLOAD EVERYTHING
+      # ---------------------------------------------------------
+
+      - name: Upload modelling data
         uses: actions/upload-artifact@v4
         with:
-          name: opta-lineups
+          name: epl-lineups-and-ratings
           path: |
-            opta_lineups.parquet
             opta_lineups_2021_2026.csv
-            epl_results.csv
+            player_ratings_2021_2026.csv
+            ratings_raw/*.csv
           retention-days: 7
